@@ -1,0 +1,154 @@
+@startuml sequence
+' ==============================================================================
+' Tên sơ đồ: Sequence Diagram - Lập bảng thanh toán (US-PAY-01) & Trình duyệt (US-PAY-02)
+' Mục đích: Mô tả trình tự tương tác giữa NVKD, Controller, AppService, Domain
+'           và các Read-Only Ports cho 2 User Story có đầy đủ thông tin yêu cầu.
+' Chuẩn tham chiếu: OMG UML 2.5.1
+' Liên kết yêu cầu: US-PAY-01, US-PAY-02, PAY-01, PAY-02, PAY-03, PAY-04, NFR-01, NFR-02
+' ==============================================================================
+
+autonumber
+skinparam responseMessageBelowArrow true
+
+actor "NVKD\n(Nhân viên kinh doanh)" as NVKD
+participant ":PaymentStatementsController" as Ctrl
+participant ":PaymentStatementAppService" as AppSvc
+participant ":IContractReadService" as ContractPort
+participant ":IVolumeReadService" as VolumePort
+participant ":IPriceListReadService" as PricePort
+participant "statement:PaymentStatement" as Domain
+participant ":IPaymentStatementRepository" as StatementRepo
+participant ":IPaymentAuditLogRepository" as AuditRepo
+participant ":INotificationService" as NotifSvc
+
+== Luồng 1: US-PAY-01 — Lập bảng thanh toán (Phản hồi < 3 giây với < 200 dòng - NFR-02) ==
+
+NVKD -> Ctrl : POST /api/v1/payment-statements\n(contractId, periodCode, note)
+activate Ctrl
+
+Ctrl -> AppSvc : CreateStatementAsync(req, actorId, ct)
+activate AppSvc
+
+AppSvc -> StatementRepo : ExistsActiveForPeriodAsync(contractId, periodCode, ct)
+activate StatementRepo
+StatementRepo --> AppSvc : exists : bool
+deactivate StatementRepo
+
+alt Đã tồn tại bảng thanh toán cho hợp đồng trong kỳ (PAY-01)
+    AppSvc --> Ctrl : throw ConflictException("PAY_01_DUPLICATE_PERIOD_STATEMENT")
+    Ctrl --> NVKD : 409 Conflict
+else Chưa tồn tại bảng thanh toán
+    AppSvc -> ContractPort : GetContractSummaryAsync(contractId, ct)
+    activate ContractPort
+    ContractPort --> AppSvc : contractDto
+    deactivate ContractPort
+
+    alt Hợp đồng không tồn tại hoặc Status != Active (PAY-01)
+        AppSvc --> Ctrl : throw UnprocessableEntityException("PAY_01_CONTRACT_NOT_ACTIVE")
+        Ctrl --> NVKD : 422 Unprocessable Entity
+    else Hợp đồng đang Active
+        AppSvc -> VolumePort : GetPeriodVolumeAsync(contractId, period, ct)
+        activate VolumePort
+        VolumePort --> AppSvc : volumeDto
+        deactivate VolumePort
+
+        alt Sản lượng của kỳ chưa ở trạng thái "Đã đối soát" (PAY-02)
+            AppSvc --> Ctrl : throw UnprocessableEntityException("PAY_02_VOLUME_NOT_RECONCILED")
+            Ctrl --> NVKD : 422 Unprocessable Entity
+        else Sản lượng đã đối soát
+            AppSvc -> PricePort : GetApplicablePriceListAsync(contractId, period, ct)
+            activate PricePort
+            PricePort --> AppSvc : priceListDto
+            deactivate PricePort
+
+            alt Không có bảng giá phù hợp cho hợp đồng tại kỳ tính phí (PAY-01)
+                AppSvc --> Ctrl : throw UnprocessableEntityException("PAY_01_PRICE_LIST_NOT_FOUND")
+                Ctrl --> NVKD : 422 Unprocessable Entity
+            else Có bảng giá phù hợp
+                AppSvc -> Domain : CreateDraft(contractId, period, lineInputs, actorId, note)
+                activate Domain
+                note right of Domain
+                  PAY-03: Thành tiền mỗi dòng = sản lượng * đơn giá
+                  tại thời điểm tính; lưu trạng thái Draft.
+                end note
+                Domain --> AppSvc : statement (Status = Draft)
+                deactivate Domain
+
+                AppSvc -> StatementRepo : AddAsync(statement, ct)
+                activate StatementRepo
+                StatementRepo --> AppSvc : ok
+                deactivate StatementRepo
+
+                AppSvc -> AuditRepo : AddAsync(auditLog("Created", null, Draft), ct)
+                activate AuditRepo
+                note right of AuditRepo
+                  NFR-01: Ghi audit log (ai, lúc nào, thay đổi gì)
+                end note
+                AuditRepo --> AppSvc : ok
+                deactivate AuditRepo
+
+                AppSvc --> Ctrl : PaymentStatementDto (Status = Draft)
+                Ctrl --> NVKD : 201 Created (PaymentStatementDto)
+            end
+        end
+    end
+end
+deactivate AppSvc
+deactivate Ctrl
+
+== Luồng 2: US-PAY-02 — Trình duyệt bảng thanh toán (Draft -> PendingApproval) ==
+
+NVKD -> Ctrl : POST /api/v1/payment-statements/{id}/submit\nHeader: Idempotency-Key\nBody: (rowVersion)
+activate Ctrl
+
+Ctrl -> AppSvc : SubmitStatementAsync(id, idempotencyKey, rowVersion, actorId, ct)
+activate AppSvc
+
+AppSvc -> StatementRepo : GetByIdAsync(id, ct)
+activate StatementRepo
+StatementRepo --> AppSvc : statement
+deactivate StatementRepo
+
+alt Bảng không ở trạng thái Draft hoặc xung đột rowVersion (PAY-04: chống trình duyệt trùng)
+    AppSvc --> Ctrl : throw ConflictException("PAY_04_DUPLICATE_SUBMISSION")
+    Ctrl --> NVKD : 409 Conflict
+else Bảng đang ở trạng thái Draft
+    AppSvc -> ContractPort : GetContractSummaryAsync(statement.ContractId, ct)
+    activate ContractPort
+    ContractPort --> AppSvc : contractDto (MandatoryServiceIds)
+    deactivate ContractPort
+
+    AppSvc -> Domain : Submit(contractDto.MandatoryServiceIds)
+    activate Domain
+
+    alt Tổng tiền âm hoặc thiếu dòng dịch vụ bắt buộc (PAY-04)
+        Domain --> AppSvc : throw DomainValidationException("PAY_04_VALIDATION_FAILED")
+        AppSvc --> Ctrl : 422 Error
+        Ctrl --> NVKD : 422 Unprocessable Entity
+    else Đạt điều kiện PAY-04
+        Domain --> AppSvc : Status = PendingApproval
+        deactivate Domain
+
+        AppSvc -> StatementRepo : UpdateAsync(statement, ct)
+        activate StatementRepo
+        StatementRepo --> AppSvc : ok
+        deactivate StatementRepo
+
+        AppSvc -> AuditRepo : AddAsync(auditLog("Submitted", Draft, PendingApproval), ct)
+        activate AuditRepo
+        AuditRepo --> AppSvc : ok
+        deactivate AuditRepo
+
+        AppSvc -> NotifSvc : NotifyApproverAsync(statement.Id, approverRole, statement.TotalAmount, ct)
+        activate NotifSvc
+        NotifSvc --> AppSvc : ok
+        deactivate NotifSvc
+
+        AppSvc --> Ctrl : PaymentStatementDto (Status = PendingApproval)
+        Ctrl --> NVKD : 200 OK (PaymentStatementDto)
+    end
+end
+deactivate AppSvc
+deactivate Ctrl
+
+@enduml

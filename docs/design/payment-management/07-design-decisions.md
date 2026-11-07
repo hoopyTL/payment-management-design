@@ -1,40 +1,39 @@
 # 07. Design Decisions (ADR) — `payment-management`
 
-> **Trạng thái thiết kế**: `Design Pending Approval`
+> **Trạng thái thiết kế**: `Approved by Reviewer`
 
 ---
 
-## ADR-01: Giao tiếp Chỉ đọc (Read-Only Ports) với Module Hợp đồng, Bảng giá và Sản lượng
-- **Context**: Đặc tả (`BAITAP_TA_1-2.pdf`, Trang 1, Mục 1) quy định: *"Quản lý hợp đồng, bảng giá và sản lượng là module khác; module này chỉ đọc dữ liệu từ chúng."*
-- **Problem**: Làm thế nào để thiết kế `payment-management` độc lập, dễ kiểm thử mà không bị phụ thuộc chặt vào cấu trúc bảng nội bộ của các module khác?
-- **Options Considered**:
-  1. Truy vấn trực tiếp bảng DB của các module Hợp đồng, Bảng giá, Sản lượng trong `PaymentStatementAppService`.
-  2. Định nghĩa các Read-Only Interfaces (`IContractReadService`, `IPriceListReadService`, `IVolumeReadService`) trả về DTO chỉ đọc.
-- **Decision**: Chọn **Phương án 2 (Read-Only Ports)**.
-- **Rationale**: Tuân thủ đúng ranh giới module trong đặc tả, giúp viết Unit Test cho `US-PAY-01` và `US-PAY-02` dễ dàng bằng cách mock 3 interfaces này, đồng thời đảm bảo module Bảng thanh toán không bao giờ vô tình ghi/sửa dữ liệu của module khác.
-- **Consequences & Risks**: Cần cài đặt Adapter thực tế khi tích hợp với các module còn lại.
+## ADR-01: Giải quyết Mâu thuẫn giữa `US-PAY-04` (Điều chỉnh bảng đã duyệt) và `PAY-05` (Không được sửa bảng `Approved`) — `ISS-03`
+- **Context**: `US-PAY-04` (Trang 2, Mục 4.4) cho phép KTT điều chỉnh bảng đã `Approved` nếu có biên bản xác nhận đính kèm, nhưng `PAY-05` (Trang 2, Mục 5) quy định *"Bảng thanh toán đã Approved không được sửa dưới bất kỳ hình thức nào"*.
+- **Decision (Nhóm đã chốt)**:
+  - Giữ bảng thanh toán gốc (`PaymentStatement`) đã `Approved` ở trạng thái **bất biến (Immutable)** để tuân thủ nghiêm ngặt `PAY-05`.
+  - Khi KTT thực hiện điều chỉnh (kèm biên bản xác nhận đính kèm), hệ thống **tạo bản ghi điều chỉnh riêng (`PaymentAdjustment`)** tham chiếu tới bảng gốc.
+  - Nếu tổng tiền sau điều chỉnh **từ 500 triệu đồng trở lên (`>= 500.000.000`)**, bản ghi điều chỉnh chuyển sang trạng thái `PendingGdkdApproval` để **GĐKD duyệt lại**; nếu `< 500.000.000` thì chuyển thẳng sang `Approved`.
+- **Consequences**: Đáp ứng đồng thời cả `PAY-05`, `US-PAY-04`, `PAY-06` và giữ nguyên lịch sử kế toán minh bạch.
 
 ---
 
-## ADR-02: Giải pháp Chống thao tác trình duyệt trùng (`PAY-04`)
-- **Context**: `PAY-04` (Trang 2, Mục 5) yêu cầu: *"Hệ thống chống thao tác trình duyệt trùng."*
-- **Problem**: Khi NVKD bấm nút "Trình duyệt" nhiều lần liên tiếp (Double-click / Network retry), hệ thống có nguy cơ chuyển trạng thái nhiều lần, ghi nhiều dòng Audit Log trùng và gửi nhiều thông báo trùng cho KTT/GĐKD.
-- **Options Considered**:
-  1. Chỉ kiểm tra `if (statement.Status != Draft)` trong code ứng dụng (dễ bị Race Condition khi 2 request vào song song).
-  2. Kết hợp kiểm tra trạng thái `Status == Draft` trong Domain + Optimistic Concurrency (`RowVersion` / PostgreSQL `xmin`) + `Idempotency-Key` trên API.
-- **Decision**: Chọn **Phương án 2**.
-- **Rationale**: Đảm bảo an toàn tuyệt đối cả khi gửi tuần tự lẫn khi 2 request đến đồng thời (PostgreSQL sẽ từ chối lệnh `UPDATE ... WHERE id = @id AND xmin = @rowVersion` thứ hai).
+## ADR-02: Giải quyết Mâu thuẫn Luồng Trạng thái khi Từ chối giữa `Mục 3` và `PAY-08` — `ISS-01`
+- **Context**: `Mục 3` (Trang 1) ghi khi bị từ chối bảng chuyển sang `Rejected`, còn `PAY-08` (Trang 2) ghi sau khi bị từ chối bảng quay về `Draft` để NVKD chỉnh sửa và trình lại.
+- **Decision (Nhóm đã chốt)**:
+  - Khi KTT/GĐKD bấm Từ chối (kèm lý do bắt buộc), bảng chuyển từ `PendingApproval` $\rightarrow$ `Rejected`.
+  - Khi NVKD mở bảng `Rejected` và chọn **"Chỉnh sửa lại"** (`revise`), bảng chuyển từ `Rejected` $\rightarrow$ `Draft` để NVKD đồng bộ/sửa ghi chú và trình duyệt lại.
+- **Consequences**: Bảo toàn đầy đủ 5 trạng thái của `Mục 3` (`Draft`, `PendingApproval`, `Approved`, `Rejected`, `Cancelled`) và đáp ứng trọn vẹn quy trình nghiệp vụ của `PAY-08`.
 
 ---
 
-## ADR-03: Cô lập các Điểm Mâu thuẫn trong Đặc tả (`ISS-01`..`ISS-04`) không để AI tự suy diễn
-- **Context**: Đặc tả `BAITAP_TA_1-2.pdf` chứa các mâu thuẫn có chủ đích để đánh giá khả năng phát hiện vấn đề (chiếm 30% tổng điểm bài tập):
-  - `ISS-01`: Khi từ chối chuyển sang `Rejected` (Mục 3) hay `Draft` (`PAY-08`)?
-  - `ISS-02`: Tổng tiền `= 500.000.000đ` do `GĐKD` duyệt (`US-PAY-03`: `>= 500tr`) hay `KTT` duyệt (`PAY-06`: `> 500tr`)?
-  - `ISS-03`: Bảng `Approved` được KTT điều chỉnh khi có biên bản (`US-PAY-04`) hay cấm sửa dưới mọi hình thức (`PAY-05`)?
-  - `ISS-04`: Kỳ thanh toán là tháng/quý (Mục 2) hay mỗi tháng 1 bảng (`PAY-01`)?
-- **Decision**:
-  - **Không tự ý chọn ngầm trong code/sơ đồ**.
-  - Tách logic kiểm tra ngưỡng 500 triệu và trạng thái từ chối vào interface chính sách `IPaymentApprovalPolicy` để sau khi Reviewer xác nhận chỉ cần cấu hình 1 chỗ duy nhất.
-  - Giữ trạng thái thiết kế của `US-PAY-04` là `Blocked / Pending Clarification (ISS-03)` cho đến khi có xác nhận chính thức từ người phụ trách.
+## ADR-03: Chốt Điều kiện Biên `500.000.000 VNĐ` (`ISS-02`) và Chống Tự duyệt khi Người lập kiêm KTT (`ISS-08`)
+- **Context**: `US-PAY-03` ghi *"từ 500 triệu đồng trở lên"* (`>= 500tr`) do GĐKD duyệt, trong khi `PAY-06` ghi *"trên 500 triệu đồng"* (`> 500tr`). Ngoài ra `PAY-07` cấm người lập tự duyệt bảng của mình.
+- **Decision (Nhóm đã chốt)**:
+  - Chốt điều kiện biên: **`TotalAmount >= 500.000.000 VNĐ` do GĐKD duyệt**; `< 500.000.000 VNĐ` do KTT duyệt.
+  - Nếu bảng `< 500.000.000 VNĐ` mà người lập bảng đồng thời là KTT, hệ thống chặn người đó tự duyệt (`PAY-07`) và định tuyến sang **KTT khác** duyệt.
 
+---
+
+## ADR-04: Ràng buộc Duy nhất theo Kỳ Tháng/Quý (`ISS-04`, `ISS-05`) & Phạm vi Chỉnh sửa ở `Draft` (`ISS-06`, `ISS-07`)
+- **Decision (Nhóm đã chốt)**:
+  1. **Kỳ thanh toán & Bảng đã hủy (`ISS-04`, `ISS-05`)**: Mỗi hợp đồng có tối đa 1 bảng thanh toán chưa bị hủy (`Status != Cancelled`) cho mỗi kỳ tháng hoặc quý theo cấu hình hợp đồng (cài đặt bằng PostgreSQL Partial Unique Index `WHERE status <> 'Cancelled'`).
+  2. **Phạm vi sửa ở `Draft` (`ISS-06`)**: NVKD chỉ được sửa ghi chú/mô tả hoặc bấm đồng bộ & tính lại từ dữ liệu nguồn (không sửa trực tiếp số lượng, đơn giá hay thêm/bớt dòng).
+  3. **Điều kiện trình duyệt (`ISS-07`)**: Chặn trình duyệt khi `TotalAmount <= 0` và kiểm tra đủ các dịch vụ trong `MandatoryServiceIds`.
+  4. **Quyền hủy bảng nháp (`ISS-08`)**: Chỉ NVKD đã lập bảng (`ActorId == CreatedBy`) mới được hủy bản nháp đó.

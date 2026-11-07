@@ -1,0 +1,35 @@
+# Báo Cáo Đánh Giá Đặc Tả & Kết Quả AI (`evaluation-report.md`)
+
+> **Tài liệu tham chiếu**: `docs/requirements/BAITAP_TA_1-2.pdf` (Trang 3 — Mục "YÊU CẦU BÀI TẬP" & "ĐÁNH GIÁ")  
+> **Bảng phân tích BA (Excel)**: `docs/requirements/QTKD_BA_Analysis.xlsx` (Sheet `04_VanDe_CanXacNhan`)
+
+---
+
+## 1. Bảng Vấn đề Phát hiện trong Đặc tả và Cách Nhóm Xử lý (Tiêu chí 30% Điểm)
+
+Trong quá trình phân tích đặc tả `BAITAP_TA_1-2.pdf`, AI BA Agent đã phát hiện **8 vấn đề** (gồm **4 mâu thuẫn trực tiếp**, **2 điểm mơ hồ** và **2 điểm thiếu thông tin**) và tách riêng để nhóm xác nhận thay vì tự suy diễn:
+
+| Mã vấn đề | Loại vấn đề | Vị trí trong đặc tả (`BAITAP_TA_1-2.pdf`) | Mô tả chi tiết vấn đề & Lý do cần xác nhận | Đề xuất của AI cho Nhóm | Cách Nhóm Xử lý (Quyết định chốt) | Đánh giá Nhận xét của AI (Đúng/Sai/Thừa) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`ISS-01`** | **Mâu thuẫn** *(Contradiction)* | Trang 1, Mục 3 vs. Trang 2, Mục 5 (`PAY-08`) | **Mục 3** quy định: *"Khi bị từ chối, bảng chuyển sang `Rejected`."* Nhưng **`PAY-08`** lại quy định: *"sau khi bị từ chối, bảng quay về trạng thái `Draft` để NVKD chỉnh sửa và trình lại."* Nếu về thẳng `Draft` thì trạng thái `Rejected` bị dư thừa; nếu dừng ở `Rejected` thì thiếu bước về `Draft`. | Đề xuất 2 phương án:<br>- PA1: Từ chối $\rightarrow$ `Rejected` (lưu lý do); khi NVKD bấm chỉnh sửa lại $\rightarrow$ `Draft`.<br>- PA2: Chuyển thẳng về `Draft` và bỏ `Rejected`. | **Chọn phương án 1**: Khi bị từ chối, bảng sang `Rejected`. Khi NVKD chọn chỉnh sửa lại, bảng về `Draft`. | **Đúng** |
+| **`ISS-02`** | **Mâu thuẫn** *(Contradiction)* | Trang 2, Mục 4.3 (`US-PAY-03`) vs. Trang 2, Mục 5 (`PAY-06`) | **`US-PAY-03`** ghi tổng tiền **từ 500 triệu đồng trở lên (`>= 500tr`)** do GĐKD duyệt. **`PAY-06`** ghi tổng tiền **trên 500 triệu đồng (`> 500tr`)** phải do GĐKD duyệt. Xung đột điều kiện biên tại đúng `Tổng tiền = 500.000.000 đồng`. | Yêu cầu xác nhận mốc biên tại `500.000.000 VNĐ`: chọn `>= 500.000.000` (theo `US-PAY-03`) hay `> 500.000.000` (theo `PAY-06`)? | **Từ 500 triệu đồng trở lên (`>= 500.000.000`) do GĐKD duyệt.** | **Đúng** |
+| **`ISS-03`** | **Mâu thuẫn** *(Contradiction)* | Trang 2, Mục 4.4 (`US-PAY-04`) vs. Trang 2, Mục 5 (`PAY-05`) | **`US-PAY-04`** cho phép *"KTT có thể điều chỉnh bảng đã `Approved` nếu có biên bản xác nhận đính kèm"*, nhưng **`PAY-05`** lại quy định *"Bảng thanh toán đã `Approved` không được sửa dưới bất kỳ hình thức nào"*. Hai câu phủ định trực tiếp nhau và chưa rõ sau điều chỉnh có cần duyệt lại không. | Đề xuất:<br>- PA1: Giữ bảng `Approved` bất biến (`PAY-05`), tạo bản ghi điều chỉnh riêng (`Adjustment`) kèm biên bản.<br>- PA2: Coi `US-PAY-04` là ngoại lệ của `PAY-05`.<br>- Xác nhận việc duyệt lại nếu vượt 500tr. | **Tạo bản ghi điều chỉnh riêng. Nếu tổng tiền sau điều chỉnh từ 500 triệu đồng trở lên thì GĐKD duyệt lại.** | **Đúng** |
+| **`ISS-04`** | **Mâu thuẫn** *(Contradiction)* | Trang 1, Mục 2 vs. Trang 2, Mục 5 (`PAY-01`) | **Mục 2** định nghĩa `Kỳ thanh toán` là **tháng hoặc quý** tùy cấu hình từng hợp đồng, nhưng **`PAY-01`** lại ghi *"Mỗi hợp đồng chỉ có một bảng thanh toán cho **mỗi tháng**"*. | Cần xác nhận quy tắc duy nhất tại `PAY-01` áp dụng theo **Kỳ thanh toán (tháng hoặc quý theo cấu hình hợp đồng)**. | **Mỗi hợp đồng có tối đa một bảng thanh toán cho mỗi kỳ tháng hoặc quý theo cấu hình.** | **Đúng** |
+| **`ISS-05`** | **Thiếu thông tin** *(Missing Info)* | Trang 2, Mục 4.5 (`US-PAY-05`) & `PAY-01` | `US-PAY-05` quy định sau khi hủy bảng chuyển sang `Cancelled` và *"không dùng lại được"*. Kết hợp với `PAY-01` (mỗi hợp đồng chỉ có 1 bảng/kỳ): nếu tính cả bảng đã `Cancelled` thì sau khi hủy bảng nháp sẽ không thể lập bảng mới cho kỳ đó. | Cần xác nhận ràng buộc 1 bảng/kỳ chỉ áp dụng cho các bảng chưa bị hủy (`Status != Cancelled`). | **Cho lập bảng mới cùng kỳ nếu bảng cũ đã bị hủy.** | **Đúng** |
+| **`ISS-06`** | **Mơ hồ** *(Ambiguity)* | Trang 2, Mục 4.1 (`US-PAY-01`) vs. Mục 1, `PAY-02`, `PAY-03` | `US-PAY-01` ghi *"NVKD được phép chỉnh sửa bảng khi còn ở Draft"*, nhưng Mục 1 nêu chỉ đọc dữ liệu từ module Hợp đồng, Bảng giá, Sản lượng và `PAY-02` yêu cầu sản lượng `"Đã đối soát"`. Chưa rõ ở `Draft` được sửa trường nào. | Xác nhận NVKD chỉ sửa ghi chú/mô tả và chọn đồng bộ/tính lại từ nguồn hay được sửa trực tiếp số lượng/đơn giá? | **Khi bảng ở `Draft`, NVKD chỉ được sửa ghi chú/mô tả hoặc chọn đồng bộ và tính lại từ dữ liệu nguồn. Không sửa trực tiếp số lượng, đơn giá hay thêm/bớt dòng.** | **Đúng** |
+| **`ISS-07`** | **Mơ hồ & Thiếu TT** | Trang 2, Mục 5 (`PAY-04`) | `PAY-04` chặn trình duyệt nếu *"tổng tiền âm hoặc thiếu dòng dịch vụ bắt buộc"*: chưa rõ `Tổng tiền = 0` có hợp lệ không và lấy danh sách dịch vụ bắt buộc từ đâu. | Xác nhận chặn khi `Tổng tiền <= 0` và dùng `MandatoryServiceIds` từ Hợp đồng để kiểm tra. | **1. Chặn trình duyệt khi tổng tiền `<= 0`.<br>2. Dùng `MandatoryServiceIds` để kiểm tra các dòng dịch vụ bắt buộc.** | **Đúng** |
+| **`ISS-08`** | **Thiếu thông tin** *(Missing Info)* | Trang 2, Mục 4.5 (`US-PAY-05`) & `PAY-07` | 1) Mục 4.5 không ghi rõ Actor nào có quyền hủy bảng `Draft`.<br>2) `PAY-07` cấm người lập tự duyệt bảng của mình: nếu người lập đồng thời giữ vai trò KTT thì ai duyệt thay? | Xác nhận quyền hủy thuộc về NVKD lập bảng, và nếu người lập trùng với KTT thì chuyển KTT khác duyệt. | **1. Chỉ NVKD đã lập bảng được hủy bản nháp.<br>2. Nếu người lập cũng là KTT thì chuyển sang KTT khác duyệt.** | **Đúng** |
+
+---
+
+## 2. So sánh Bản Thiết kế Lần chạy đầu (`v1-initial`) và Bản Sau Review (`payment-management`)
+
+| Hạng mục so sánh | Bản thiết kế lần chạy đầu (`docs/design/payment-management-v1-initial/`) | Bản thiết kế sau khi Nhóm Review (`docs/design/payment-management/`) |
+| :--- | :--- | :--- |
+| **Trạng thái thiết kế** | `Design Pending Approval` (Tách riêng 8 câu hỏi mở `ISS-01`..`ISS-08`, không tự suy diễn) | `Approved by Reviewer` (Đã tích hợp toàn bộ 8 quyết định của nhóm) |
+| **Phạm vi User Story** | Thiết kế chi tiết `US-PAY-01`, `US-PAY-02`, `US-PAY-05`; cô lập `US-PAY-03` qua `IPaymentApprovalPolicy` và khóa tạm `US-PAY-04` do mâu thuẫn với `PAY-05`. | Thiết kế đầy đủ cả 5 User Stories (`US-PAY-01` đến `US-PAY-05`), bao gồm thực thể `PaymentAdjustment` và `PaymentAdjustmentLine` cho `US-PAY-04`. |
+| **Luồng Từ chối (`ISS-01`)** | Để mở 2 nhánh giữa `Rejected` (Mục 3) và `Draft` (`PAY-08`). | Chốt luồng: `PendingApproval` $\xrightarrow{\text{reject}}$ `Rejected` $\xrightarrow{\text{revise}}$ `Draft`. |
+| **Ngưỡng duyệt 500 triệu (`ISS-02`)** | Tách biến chính sách tại mốc `500.000.000`. | Chốt cứng hằng số `GdkdApprovalThreshold = 500_000_000`: `>= 500tr` do `GĐKD` duyệt, `< 500tr` do `KTT` duyệt. |
+| **Điều chỉnh sau duyệt (`ISS-03`)** | Chặn thiết kế sửa trực tiếp bảng `Approved` để bảo vệ `PAY-05`. | Bổ sung bảng `payment_adjustments` (bản ghi điều chỉnh riêng) và luồng `PendingGdkdApproval` khi tổng tiền sau điều chỉnh `>= 500tr`. |
+| **Bộ sơ đồ UML (`diagrams/`)** | Gồm `class.puml` và `sequence.puml` cho phạm vi ban đầu. | Đầy đủ 4 sơ đồ chuẩn UML 2.5.1: `component.puml`, `class.puml`, `sequence.puml`, `state-machine.puml`. |
+

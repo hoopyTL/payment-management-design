@@ -1,0 +1,56 @@
+@startuml
+!pragma graphviz_dot smetana
+' ==============================================================================
+' Tên sơ đồ: Component Diagram - Kiến trúc Module Quản lý Bảng thanh toán
+' Mục đích: Mô tả các thành phần phần mềm trong module PaymentManagement và
+'           các giao diện chỉ đọc (Read-Only Ports) sang các module bên ngoài.
+' Chuẩn tham chiếu: OMG UML 2.5.1
+' Trạng thái kết xuất: Đã kiểm tra kết xuất thành công (PlantUML 1.2021.00 - smetana)
+' Liên kết yêu cầu: BAITAP_TA_1-2.pdf (Mục 1, Mục 4, Mục 5, Mục 6)
+' ==============================================================================
+
+skinparam componentStyle uml2
+
+package "Qtkd.Api — PaymentManagement Module (TO-BE)" {
+    [PaymentStatementsController] <<API Controller>> as Ctrl
+    [PaymentStatementAppService] <<Application Service>> as AppSvc
+    [PaymentDomainModel\n(PaymentStatement, PaymentLine)] <<Domain Model>> as Domain
+    [PaymentRepository\n& AuditLogRepository] <<Persistence Adapter>> as Repo
+
+    interface "IPaymentStatementAppService" as IAppSvc
+    interface "IPaymentStatementRepository\nIPaymentAuditLogRepository" as IRepo
+
+    Ctrl --> IAppSvc
+    IAppSvc - [AppSvc]
+    AppSvc --> Domain
+    AppSvc --> IRepo
+    IRepo - [Repo]
+}
+
+package "External Modules (Read-Only Dependencies - Mục 1)" {
+    interface "IContractReadService" as IContractPort
+    interface "IPriceListReadService" as IPricePort
+    interface "IVolumeReadService" as IVolumePort
+    interface "INotificationService" as INotifPort
+
+    [Contract Module] <<External Module>> as ContractMod
+    [PriceList Module] <<External Module>> as PriceMod
+    [Volume Module] <<External Module>> as VolumeMod
+    [Notification Module] <<External Module>> as NotifMod
+
+    IContractPort - [ContractMod]
+    IPricePort - [PriceMod]
+    IVolumePort - [VolumeMod]
+    INotifPort - [NotifMod]
+}
+
+database "PostgreSQL Database" as DB {
+    [payment_statements\npayment_lines\npayment_audit_logs] as Tables
+}
+
+AppSvc --> IContractPort : Chỉ đọc Hợp đồng (PAY-01, PAY-04)
+AppSvc --> IPricePort : Chỉ đọc Bảng giá (PAY-01, PAY-03)
+AppSvc --> IVolumePort : Chỉ đọc Sản lượng đã đối soát (PAY-02)
+AppSvc --> INotifPort : Gửi thông báo trình duyệt (US-PAY-02)
+Repo --> Tables : EF Core / Transaction (NFR-01, NFR-02)
+@enduml

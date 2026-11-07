@@ -1,12 +1,12 @@
-@startuml class
-!pragma layout smetana
+@startuml
+!pragma graphviz_dot smetana
 ' ==============================================================================
 ' Tên sơ đồ: Class Diagram - Module Quản lý Bảng thanh toán (payment-management)
-' Mục đích: Mô tả cấu trúc lớp Domain, Application, Ports & Persistence cho
-'           US-PAY-01 (Lập bảng), US-PAY-02 (Trình duyệt), US-PAY-03 (Duyệt/Từ chối),
-'           US-PAY-05 (Hủy bảng nháp) và Audit Log (NFR-01).
+' Mục đích: Mô tả cấu trúc lớp sau khi Nhóm chốt toàn bộ 8 vấn đề (ISS-01..ISS-08)
+'           bao phủ US-PAY-01..05, PAY-01..08 và NFR-01..02.
 ' Chuẩn tham chiếu: OMG UML 2.5.1
-' Liên kết yêu cầu: BAITAP_TA_1-2.pdf (Mục 1..6, US-PAY-01..05, PAY-01..08, NFR-01..02)
+' Trạng thái kết xuất: Đã kiểm tra kết xuất thành công (PlantUML 1.2021.00 - smetana)
+' Liên kết yêu cầu: BAITAP_TA_1-2.pdf (Mục 1..6, US-PAY-01..05, PAY-01..08, ISS-01..08)
 ' ==============================================================================
 
 skinparam classAttributeIconSize 0
@@ -22,6 +22,17 @@ package "PaymentManagement.Domain" {
         Cancelled
     }
 
+    enum AdjustmentStatus {
+        PendingGdkdApproval
+        Approved
+        Rejected
+    }
+
+    enum PeriodType {
+        Monthly
+        Quarterly
+    }
+
     enum UserRole {
         NVKD
         KTT
@@ -30,11 +41,13 @@ package "PaymentManagement.Domain" {
 
     class BillingPeriod <<ValueObject>> {
         +PeriodCode : string
+        +PeriodType : PeriodType
         +StartDate : DateOnly
         +EndDate : DateOnly
     }
 
     class PaymentStatement <<AggregateRoot>> {
+        +{static} GdkdApprovalThreshold : decimal = 500000000
         +Id : Guid
         +StatementCode : string
         +ContractId : Guid
@@ -50,12 +63,15 @@ package "PaymentManagement.Domain" {
         +ApprovedAt : DateTimeOffset?
         +RowVersion : uint
         --
-        +{static} CreateDraft(contractId : Guid, period : BillingPeriod, lines : IEnumerable<PaymentLineInput>, createdBy : Guid, note : string?) : PaymentStatement
-        +UpdateDraft(note : string?) : void
-        +Submit(mandatoryServiceIds : IReadOnlyCollection<Guid>) : void
-        +Cancel() : void
-        +Approve(approverId : Guid, approverRole : UserRole, policy : IPaymentApprovalPolicy) : void
-        +Reject(approverId : Guid, approverRole : UserRole, reason : string, policy : IPaymentApprovalPolicy) : void
+        +{static} CreateDraft(contractId : Guid, period : BillingPeriod, lines : IReadOnlyList<PaymentLineInput>, nvkdUserId : Guid, note : string?) : PaymentStatement
+        +UpdateDraft(actorId : Guid, note : string?, resyncedLines : IReadOnlyList<PaymentLineInput>?) : void
+        +Submit(actorId : Guid, mandatoryServiceIds : IReadOnlyCollection<Guid>) : void
+        +GetRequiredApproverRole() : UserRole
+        +Approve(approverId : Guid, approverRole : UserRole) : void
+        +Reject(approverId : Guid, approverRole : UserRole, reason : string) : void
+        +ReviseToDraft(nvkdActorId : Guid) : void
+        +Cancel(actorId : Guid) : void
+        +CreateAdjustment(kttActorId : Guid, confirmationDocUrl : string, reason : string, adjustedLines : IReadOnlyList<PaymentLineInput>) : PaymentAdjustment
     }
 
     class PaymentLine <<Entity>> {
@@ -67,38 +83,52 @@ package "PaymentManagement.Domain" {
         +Quantity : decimal
         +UnitPrice : decimal
         +LineAmount : decimal
+    }
+
+    class PaymentAdjustment <<Entity>> {
+        +Id : Guid
+        +PaymentStatementId : Guid
+        +AdjustmentCode : string
+        +ConfirmationDocumentUrl : string
+        +Reason : string
+        +PreviousTotalAmount : decimal
+        +AdjustedTotalAmount : decimal
+        +Status : AdjustmentStatus
+        +CreatedByKttId : Guid
+        +CreatedAt : DateTimeOffset
+        +ApprovedByGdkdId : Guid?
+        +ApprovedAt : DateTimeOffset?
         --
-        +PaymentLine(serviceId : Guid, serviceCode : string, serviceName : string, quantity : decimal, unitPrice : decimal)
+        +ApproveByGdkd(gdkdUserId : Guid) : void
+    }
+
+    class PaymentAdjustmentLine <<Entity>> {
+        +Id : Guid
+        +PaymentAdjustmentId : Guid
+        +ServiceId : Guid
+        +Quantity : decimal
+        +UnitPrice : decimal
+        +LineAmount : decimal
     }
 
     class PaymentAuditLog <<Entity>> {
         +Id : Guid
         +PaymentStatementId : Guid
+        +AdjustmentId : Guid?
         +ActorId : Guid
         +OccurredAt : DateTimeOffset
         +Action : string
-        +OldStatus : PaymentStatus?
-        +NewStatus : PaymentStatus
+        +OldStatus : string?
+        +NewStatus : string
         +ChangeDetailsJson : string
     }
 
-    interface IPaymentApprovalPolicy {
-        +DetermineRequiredApproverRole(totalAmount : decimal) : UserRole
-        +GetPostRejectionStatus() : PaymentStatus
-    }
-
-    note right of IPaymentApprovalPolicy
-      Cô lập 2 điểm mâu thuẫn trong đặc tả (chờ Reviewer xác nhận):
-      - ISS-01 (Mục 3 vs PAY-08): Từ chối chuyển sang Rejected hay Draft?
-      - ISS-02 (US-PAY-03 vs PAY-06): Mốc = 500.000.000đ do GĐKD hay KTT duyệt?
-      Lưu ý ISS-03: US-PAY-04 (điều chỉnh bảng Approved) đang khóa
-      vì mâu thuẫn trực tiếp với PAY-05.
-    end note
-
     PaymentStatement "1" *-- "1..*" PaymentLine : contains >
-    PaymentStatement --> PaymentStatus : has
-    PaymentStatement *-- "1" BillingPeriod : for period
-    PaymentStatement ..> IPaymentApprovalPolicy : uses
+    PaymentStatement "1" *-- "0..*" PaymentAdjustment : has adjustments (ISS-03) >
+    PaymentAdjustment "1" *-- "1..*" PaymentAdjustmentLine : contains >
+    PaymentStatement --> PaymentStatus : status
+    PaymentAdjustment --> AdjustmentStatus : status
+    PaymentStatement *-- "1" BillingPeriod : period (ISS-04)
     PaymentAuditLog "0..*" --> "1" PaymentStatement : audits >
 }
 
@@ -108,19 +138,15 @@ package "PaymentManagement.Application" {
         +CreateStatementAsync(req : CreatePaymentStatementRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
         +UpdateDraftAsync(id : Guid, req : UpdateDraftRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
         +SubmitStatementAsync(id : Guid, idempotencyKey : string, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
-        +CancelDraftAsync(id : Guid, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<void>
         +ApproveStatementAsync(id : Guid, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
         +RejectStatementAsync(id : Guid, reason : string, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
+        +ReviseRejectedToDraftAsync(id : Guid, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +CancelDraftAsync(id : Guid, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<void>
+        +CreateAdjustmentAsync(id : Guid, req : CreateAdjustmentRequest, kttActorId : Guid, ct : CancellationToken) : Task<PaymentAdjustmentDto>
+        +ApproveAdjustmentByGdkdAsync(id : Guid, adjId : Guid, gdkdActorId : Guid, ct : CancellationToken) : Task<PaymentAdjustmentDto>
     }
 
-    class PaymentStatementAppService {
-        +CreateStatementAsync(req : CreatePaymentStatementRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
-        +UpdateDraftAsync(id : Guid, req : UpdateDraftRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
-        +SubmitStatementAsync(id : Guid, idempotencyKey : string, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
-        +CancelDraftAsync(id : Guid, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<void>
-        +ApproveStatementAsync(id : Guid, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
-        +RejectStatementAsync(id : Guid, reason : string, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
-    }
+    class PaymentStatementAppService
 
     interface IContractReadService <<ReadOnlyPort>> {
         +GetContractSummaryAsync(contractId : Guid, ct : CancellationToken) : Task<ContractReadDto?>
@@ -135,11 +161,11 @@ package "PaymentManagement.Application" {
     }
 
     interface INotificationService <<Port>> {
-        +NotifyApproverAsync(statementId : Guid, approverRole : UserRole, totalAmount : decimal, ct : CancellationToken) : Task
+        +NotifyApproverAsync(statementId : Guid, approverRole : UserRole, excludedUserId : Guid, totalAmount : decimal, ct : CancellationToken) : Task
     }
 
     interface IPaymentStatementRepository <<Repository>> {
-        +ExistsActiveForPeriodAsync(contractId : Guid, periodCode : string, ct : CancellationToken) : Task<bool>
+        +ExistsNonCancelledForPeriodAsync(contractId : Guid, periodCode : string, ct : CancellationToken) : Task<bool>
         +GetByIdAsync(id : Guid, ct : CancellationToken) : Task<PaymentStatement?>
         +AddAsync(statement : PaymentStatement, ct : CancellationToken) : Task
         +UpdateAsync(statement : PaymentStatement, ct : CancellationToken) : Task
@@ -156,9 +182,7 @@ package "PaymentManagement.Application" {
     PaymentStatementAppService --> IPriceListReadService
     PaymentStatementAppService --> IVolumeReadService
     PaymentStatementAppService --> INotificationService
-    PaymentStatementAppService --> IPaymentApprovalPolicy
     PaymentStatementAppService ..> PaymentStatement : orchestrates
-    PaymentStatementAppService ..> PaymentAuditLog : records
 }
 
 package "PaymentManagement.Presentation" {
@@ -167,12 +191,14 @@ package "PaymentManagement.Presentation" {
         +Create(req : CreatePaymentStatementRequest) : Task<IActionResult>
         +UpdateDraft(id : Guid, req : UpdateDraftRequest) : Task<IActionResult>
         +Submit(id : Guid, idempotencyKey : string, req : SubmitRequest) : Task<IActionResult>
-        +Cancel(id : Guid, req : CancelRequest) : Task<IActionResult>
         +Approve(id : Guid, req : ApproveRequest) : Task<IActionResult>
         +Reject(id : Guid, req : RejectRequest) : Task<IActionResult>
+        +Revise(id : Guid, req : ReviseRequest) : Task<IActionResult>
+        +Cancel(id : Guid, req : CancelRequest) : Task<IActionResult>
+        +CreateAdjustment(id : Guid, req : CreateAdjustmentRequest) : Task<IActionResult>
+        +ApproveAdjustment(id : Guid, adjId : Guid) : Task<IActionResult>
     }
 
     PaymentStatementsController --> IPaymentStatementAppService
 }
-
 @enduml
