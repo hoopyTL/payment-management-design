@@ -1,0 +1,178 @@
+@startuml class
+!pragma graphviz_dot smetana
+' ==============================================================================
+' Tên sơ đồ: Class Diagram - Module Quản lý Bảng thanh toán (payment-management)
+' Mục đích: Mô tả cấu trúc lớp Domain, Application, Ports & Persistence cho
+'           US-PAY-01 (Lập bảng), US-PAY-02 (Trình duyệt), US-PAY-03 (Duyệt/Từ chối),
+'           US-PAY-05 (Hủy bảng nháp) và Audit Log (NFR-01).
+' Chuẩn tham chiếu: OMG UML 2.5.1
+' Liên kết yêu cầu: BAITAP_TA_1-2.pdf (Mục 1..6, US-PAY-01..05, PAY-01..08, NFR-01..02)
+' ==============================================================================
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "PaymentManagement.Domain" {
+
+    enum PaymentStatus {
+        Draft
+        PendingApproval
+        Approved
+        Rejected
+        Cancelled
+    }
+
+    enum UserRole {
+        NVKD
+        KTT
+        GDKD
+    }
+
+    class BillingPeriod <<ValueObject>> {
+        +PeriodCode : string
+        +StartDate : DateOnly
+        +EndDate : DateOnly
+    }
+
+    class PaymentStatement <<AggregateRoot>> {
+        +Id : Guid
+        +StatementCode : string
+        +ContractId : Guid
+        +Period : BillingPeriod
+        +TotalAmount : decimal
+        +Status : PaymentStatus
+        +Note : string?
+        +RejectionReason : string?
+        +CreatedBy : Guid
+        +CreatedAt : DateTimeOffset
+        +SubmittedAt : DateTimeOffset?
+        +ApprovedBy : Guid?
+        +ApprovedAt : DateTimeOffset?
+        +RowVersion : uint
+        --
+        +{static} CreateDraft(contractId : Guid, period : BillingPeriod, lines : IEnumerable<PaymentLineInput>, createdBy : Guid, note : string?) : PaymentStatement
+        +UpdateDraft(note : string?) : void
+        +Submit(mandatoryServiceIds : IReadOnlyCollection<Guid>) : void
+        +Cancel() : void
+        +Approve(approverId : Guid, approverRole : UserRole, policy : IPaymentApprovalPolicy) : void
+        +Reject(approverId : Guid, approverRole : UserRole, reason : string, policy : IPaymentApprovalPolicy) : void
+    }
+
+    class PaymentLine <<Entity>> {
+        +Id : Guid
+        +PaymentStatementId : Guid
+        +ServiceId : Guid
+        +ServiceCode : string
+        +ServiceName : string
+        +Quantity : decimal
+        +UnitPrice : decimal
+        +LineAmount : decimal
+        --
+        +PaymentLine(serviceId : Guid, serviceCode : string, serviceName : string, quantity : decimal, unitPrice : decimal)
+    }
+
+    class PaymentAuditLog <<Entity>> {
+        +Id : Guid
+        +PaymentStatementId : Guid
+        +ActorId : Guid
+        +OccurredAt : DateTimeOffset
+        +Action : string
+        +OldStatus : PaymentStatus?
+        +NewStatus : PaymentStatus
+        +ChangeDetailsJson : string
+    }
+
+    interface IPaymentApprovalPolicy {
+        +DetermineRequiredApproverRole(totalAmount : decimal) : UserRole
+        +GetPostRejectionStatus() : PaymentStatus
+    }
+
+    note right of IPaymentApprovalPolicy
+      Cô lập 2 điểm mâu thuẫn trong đặc tả (chờ Reviewer xác nhận):
+      - ISS-01 (Mục 3 vs PAY-08): Từ chối chuyển sang Rejected hay Draft?
+      - ISS-02 (US-PAY-03 vs PAY-06): Mốc = 500.000.000đ do GĐKD hay KTT duyệt?
+      Lưu ý ISS-03: US-PAY-04 (điều chỉnh bảng Approved) đang khóa
+      vì mâu thuẫn trực tiếp với PAY-05.
+    end note
+
+    PaymentStatement "1" *-- "1..*" PaymentLine : contains >
+    PaymentStatement --> PaymentStatus : has
+    PaymentStatement *-- "1" BillingPeriod : for period
+    PaymentStatement ..> IPaymentApprovalPolicy : uses
+    PaymentAuditLog "0..*" --> "1" PaymentStatement : audits >
+}
+
+package "PaymentManagement.Application" {
+
+    interface IPaymentStatementAppService {
+        +CreateStatementAsync(req : CreatePaymentStatementRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +UpdateDraftAsync(id : Guid, req : UpdateDraftRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +SubmitStatementAsync(id : Guid, idempotencyKey : string, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +CancelDraftAsync(id : Guid, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<void>
+        +ApproveStatementAsync(id : Guid, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
+        +RejectStatementAsync(id : Guid, reason : string, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
+    }
+
+    class PaymentStatementAppService {
+        +CreateStatementAsync(req : CreatePaymentStatementRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +UpdateDraftAsync(id : Guid, req : UpdateDraftRequest, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +SubmitStatementAsync(id : Guid, idempotencyKey : string, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<PaymentStatementDto>
+        +CancelDraftAsync(id : Guid, rowVersion : uint, actorId : Guid, ct : CancellationToken) : Task<void>
+        +ApproveStatementAsync(id : Guid, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
+        +RejectStatementAsync(id : Guid, reason : string, rowVersion : uint, actorId : Guid, role : UserRole, ct : CancellationToken) : Task<PaymentStatementDto>
+    }
+
+    interface IContractReadService <<ReadOnlyPort>> {
+        +GetContractSummaryAsync(contractId : Guid, ct : CancellationToken) : Task<ContractReadDto?>
+    }
+
+    interface IPriceListReadService <<ReadOnlyPort>> {
+        +GetApplicablePriceListAsync(contractId : Guid, period : BillingPeriod, ct : CancellationToken) : Task<PriceListReadDto?>
+    }
+
+    interface IVolumeReadService <<ReadOnlyPort>> {
+        +GetPeriodVolumeAsync(contractId : Guid, period : BillingPeriod, ct : CancellationToken) : Task<VolumeReadDto?>
+    }
+
+    interface INotificationService <<Port>> {
+        +NotifyApproverAsync(statementId : Guid, approverRole : UserRole, totalAmount : decimal, ct : CancellationToken) : Task
+    }
+
+    interface IPaymentStatementRepository <<Repository>> {
+        +ExistsActiveForPeriodAsync(contractId : Guid, periodCode : string, ct : CancellationToken) : Task<bool>
+        +GetByIdAsync(id : Guid, ct : CancellationToken) : Task<PaymentStatement?>
+        +AddAsync(statement : PaymentStatement, ct : CancellationToken) : Task
+        +UpdateAsync(statement : PaymentStatement, ct : CancellationToken) : Task
+    }
+
+    interface IPaymentAuditLogRepository <<Repository>> {
+        +AddAsync(auditLog : PaymentAuditLog, ct : CancellationToken) : Task
+    }
+
+    PaymentStatementAppService ..|> IPaymentStatementAppService
+    PaymentStatementAppService --> IPaymentStatementRepository
+    PaymentStatementAppService --> IPaymentAuditLogRepository
+    PaymentStatementAppService --> IContractReadService
+    PaymentStatementAppService --> IPriceListReadService
+    PaymentStatementAppService --> IVolumeReadService
+    PaymentStatementAppService --> INotificationService
+    PaymentStatementAppService --> IPaymentApprovalPolicy
+    PaymentStatementAppService ..> PaymentStatement : orchestrates
+    PaymentStatementAppService ..> PaymentAuditLog : records
+}
+
+package "PaymentManagement.Presentation" {
+    class PaymentStatementsController {
+        -appService : IPaymentStatementAppService
+        +Create(req : CreatePaymentStatementRequest) : Task<IActionResult>
+        +UpdateDraft(id : Guid, req : UpdateDraftRequest) : Task<IActionResult>
+        +Submit(id : Guid, idempotencyKey : string, req : SubmitRequest) : Task<IActionResult>
+        +Cancel(id : Guid, req : CancelRequest) : Task<IActionResult>
+        +Approve(id : Guid, req : ApproveRequest) : Task<IActionResult>
+        +Reject(id : Guid, req : RejectRequest) : Task<IActionResult>
+    }
+
+    PaymentStatementsController --> IPaymentStatementAppService
+}
+
+@enduml
