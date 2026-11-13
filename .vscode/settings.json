@@ -1,4 +1,4 @@
 {
-  "plantuml.render": "PlantUMLServer",
-  "plantuml.server": "https://www.plantuml.com/plantuml"
+  "plantuml.render": "Local",
+  "plantuml.java": "C:\\Users\\ADMIN\\Desktop\\payment-management-design\\.local\\jdk-17.0.21+9-jre\\bin\\java.exe"
 }
