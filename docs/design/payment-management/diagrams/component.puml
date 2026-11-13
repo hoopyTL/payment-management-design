@@ -1,5 +1,5 @@
 @startuml
-!pragma graphviz_dot smetana
+!pragma layout smetana
 ' ==============================================================================
 ' Tên sơ đồ: Component Diagram - Kiến trúc Module Quản lý Bảng thanh toán
 ' Mục đích: Mô tả các thành phần phần mềm trong module PaymentManagement và

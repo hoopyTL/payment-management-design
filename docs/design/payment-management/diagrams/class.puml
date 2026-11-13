@@ -1,5 +1,5 @@
 @startuml
-!pragma graphviz_dot smetana
+!pragma layout smetana
 ' ==============================================================================
 ' Tên sơ đồ: Class Diagram - Module Quản lý Bảng thanh toán (payment-management)
 ' Mục đích: Mô tả cấu trúc lớp sau khi Nhóm chốt toàn bộ 8 vấn đề (ISS-01..ISS-08)

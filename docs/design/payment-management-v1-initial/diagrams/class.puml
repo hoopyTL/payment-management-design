@@ -1,5 +1,5 @@
 @startuml class
-!pragma graphviz_dot smetana
+!pragma layout smetana
 ' ==============================================================================
 ' Tên sơ đồ: Class Diagram - Module Quản lý Bảng thanh toán (payment-management)
 ' Mục đích: Mô tả cấu trúc lớp Domain, Application, Ports & Persistence cho

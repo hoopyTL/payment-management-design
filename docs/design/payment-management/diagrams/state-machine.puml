@@ -1,5 +1,5 @@
 @startuml 
-!pragma graphviz_dot smetana
+!pragma layout smetana
 ' ==============================================================================
 ' Tên sơ đồ: State Machine Diagram - Vòng đời Trạng thái Bảng thanh toán & Bản điều chỉnh
 ' Mục đích: Mô tả trạng thái của PaymentStatement và PaymentAdjustment sau khi
